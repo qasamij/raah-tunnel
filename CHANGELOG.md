@@ -2,12 +2,12 @@
 
 **[English](CHANGELOG.md)** · **[فارسی](CHANGELOG.fa.md)** · [LICENSE](LICENSE) · [README](README.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [PROTOCOLS](docs/PROTOCOLS.md)
 
-All notable changes to this project are recorded here. Both files are kept in
-step: the English and Persian changelogs always carry the same releases and the
-same entries, and `tests/test-docs.sh` fails if they drift apart.
+All notable changes to this project are recorded here. The two files are kept
+in step: anything described in `CHANGELOG.fa.md` is also described here, and
+`tests/test-docs.sh` fails if they drift apart.
 
-Releases older than **0.11.0** are recorded here only; the Persian changelog
-starts at 0.11.0. Everything listed in `CHANGELOG.fa.md` is also listed here.
+The Persian changelog starts at **0.11.0**. Releases older than that are
+recorded here only.
 
 ## Unreleased
 
