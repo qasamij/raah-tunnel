@@ -5,8 +5,18 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/one-click-install.sh"
-BUNDLE="/root/raah-private-bundle"
-CNT="/tmp/raah-generate-calls"
+
+# The product defaults the bundle to /root/raah-private-bundle, but a CI runner
+# is not root, so writing there fails and the whole suite errors out for a
+# reason that has nothing to do with the code under test. Point it at a temp
+# directory instead. setup_role reads BUNDLE_DIR, which the sourced installer
+# derives from RAAH_BUNDLE, so this must be exported before the source below.
+RAAH_BUNDLE="${RAAH_BUNDLE:-${TMPDIR:-/tmp}/raah-test-bundle}"
+export RAAH_BUNDLE
+BUNDLE="$RAAH_BUNDLE"
+mkdir -p "$BUNDLE" 2>/dev/null || { echo "cannot create $BUNDLE"; exit 1; }
+[[ -w "$BUNDLE" ]] || { echo "$BUNDLE is not writable; set TMPDIR"; exit 1; }
+CNT="${TMPDIR:-/tmp}/raah-generate-calls"
 
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$*"; pass=$((pass+1)); }
@@ -16,7 +26,10 @@ LAST=$(grep -n '^menu() {' "$INSTALLER" | cut -d: -f1)
 FN_END=$(awk -v s="$LAST" 'NR>=s && /^}$/ { print NR; exit }' "$INSTALLER")
 # shellcheck disable=SC1090
 source <(sed -n "1,${FN_END}p" "$INSTALLER")
+# The sourced installer installs its own EXIT trap; clear it, then install ours
+# so the counter files do not survive in TMPDIR.
 trap - EXIT
+trap 'rm -f "$CNT" "$CNT.rc"' EXIT
 set +e
 
 calls() { local n; n=$(grep -c . "$CNT" 2>/dev/null) || n=0; printf '%s' "$n"; }

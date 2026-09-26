@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/one-click-install.sh"
 DOCS="$ROOT"
 
+doc_nums="$(mktemp)"
+trap 'rm -f "$doc_nums"' EXIT
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$*"; pass=$((pass+1)); }
 bad() { printf '  FAIL  %s\n' "$*"; fail=$((fail+1)); }
@@ -30,10 +32,10 @@ done
 
 echo
 echo "=== 2. every quoted number in README.md is a real option ==="
-grep -oE '^\| .*\| \*\*[0-9]\*\*' "$DOCS/README.md" | grep -oE '[0-9]' | sort -u > /tmp/doc-nums
+grep -oE '^\| .*\| \*\*[0-9]\*\*' "$DOCS/README.md" | grep -oE '[0-9]' | sort -u > $doc_nums
 while read -r n; do
   has_opt "$n" && ok "README table references option $n" || bad "README references missing option $n"
-done < /tmp/doc-nums
+done < $doc_nums
 
 echo
 echo "=== 3. doc claims about specific options still line up ==="
@@ -83,7 +85,7 @@ for f in README.md README.fa.md; do
   fi
 done
 
-rm -f /tmp/doc-nums
+rm -f $doc_nums
 echo
 echo "=================================================="
 printf '  %d passed, %d failed\n' "$pass" "$fail"

@@ -15,6 +15,11 @@ NO_DISCOVERY=0
 HOP_ARG=""
 RUNTIME_ROOT=""
 
+# The live credentials live here. It is spelled once so the prompts, the
+# uninstall and the setup paths cannot drift apart, and it stays overridable so
+# the test suite can run as an unprivileged user.
+BUNDLE_DIR="${RAAH_BUNDLE:-/root/raah-private-bundle}"
+
 # The interactive wizard must read from the real terminal even when this script's
 # stdin is a pipe, which is the normal case from the menu. Where there is no
 # controlling terminal at all (a bare `ssh host 'command'`, a CI runner, a cron
@@ -164,12 +169,12 @@ uninstall_raah() {
   rm -rf -- /etc/raah "$APP_ROOT"
   systemctl daemon-reload
   systemctl reset-failed raah-sing-box raah-port-hop 2>/dev/null || true
-  read -r -p 'Also permanently delete /root/raah-private-bundle and its live credentials? [y/N]: ' remove_bundle || true
+  read -r -p "Also permanently delete $BUNDLE_DIR and its live credentials? [y/N]: " remove_bundle || true
   if [[ "$remove_bundle" == "y" || "$remove_bundle" == "Y" ]]; then
-    rm -rf -- /root/raah-private-bundle
+    rm -rf -- "$BUNDLE_DIR"
     printf 'Private bundle deleted permanently.\n'
   else
-    printf 'Private bundle kept at /root/raah-private-bundle.\n'
+    printf 'Private bundle kept at %s.\n' "$BUNDLE_DIR"
   fi
   printf 'Raah was removed. sing-box remains installed.\n'
 }
@@ -246,7 +251,7 @@ role_config() {
 # cannot talk to each other, so ask before generating when the answer is not
 # obviously yes, and always say out loud which half is being installed here.
 setup_role() {
-  local role="$1" bundle="/root/raah-private-bundle" want other_role other answer cfg prepared=0
+  local role="$1" bundle="$BUNDLE_DIR" want other_role other answer cfg prepared=0
   want="$(role_config "$role")"
   # Keep the lowercase name for role_config and the uppercase one for the text:
   # conflating them once printed "--config /root/ --start" with no filename.
@@ -355,7 +360,7 @@ EOF
 # Advanced path: build a bundle without installing anything here. Direct mode is
 # covered by the role-based setup, so only the other topologies are offered.
 build_bundle() {
-  local choice bundle="/root/raah-private-bundle"
+  local choice bundle="$BUNDLE_DIR"
   printf '\n  Which topology?\n'
   printf '  2) Reverse  traffic enters OUTSIDE and leaves via IRAN\n'
   printf '  3) Both     build direct and reverse side by side\n'
@@ -416,16 +421,16 @@ menu() {
       4) build_bundle ;;
       5) systemctl --no-pager status raah-sing-box raah-port-hop || true ;;
       6)
-        read -r -p 'Client config path [/root/raah-private-bundle/client-linux.json]: ' client_file
-        client_file="${client_file:-/root/raah-private-bundle/client-linux.json}"
+        read -r -p "Client config path [$BUNDLE_DIR/client-linux.json]: " client_file
+        client_file="${client_file:-$BUNDLE_DIR/client-linux.json}"
         if [[ -f "$client_file" ]]; then
           if prepare_environment; then
             python3 "$RAAHCTL" e2e-probe "$client_file" --count 3
           fi
         else printf 'Client config file not found.\n' >&2; fi ;;
       7)
-        read -r -p 'Bundle path [/root/raah-private-bundle]: ' bundle_path
-        bundle_path="${bundle_path:-/root/raah-private-bundle}"
+        read -r -p "Bundle path [$BUNDLE_DIR]: " bundle_path
+        bundle_path="${bundle_path:-$BUNDLE_DIR}"
         if [[ -d "$bundle_path" ]]; then
           if prepare_environment; then
             python3 "$RAAHCTL" edit-bundle "$bundle_path" <"$TTY_IN"
@@ -573,7 +578,7 @@ fi
 prepare_environment
 
 if [[ "$GENERATE" -eq 1 ]]; then
-  bundle="/root/raah-private-bundle"
+  bundle="$BUNDLE_DIR"
   info "Starting the interactive generator; create the pair only once"
   args=(generate --mode "$MODE" --out "$bundle")
   [[ "$AUTO_SNI" -eq 0 ]] || args+=(--auto-sni)
