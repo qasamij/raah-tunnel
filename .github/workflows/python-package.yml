@@ -1,0 +1,97 @@
+name: Python package
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every interpreter instead of cancelling the siblings of a
+      # failure; a 3.9-only regression must not hide behind a green 3.11 run.
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # A flattened web upload keeps the files but drops scripts/ and tests/,
+      # which surfaces much later as an unrelated exit code 127 from bash.
+      - name: Verify repository layout
+        run: |
+          for f in raahctl.py one-click-install.sh scripts/install-unit.sh scripts/port-hop.sh tests/test_raahctl.py tests/ci_generate_bundle.py; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing $f -- the repository layout is flattened or incomplete"
+              exit 1
+            fi
+          done
+          if [ -n "$(git ls-files '*.pyc' '__pycache__/*')" ]; then
+            echo "::error::compiled Python bytecode is committed; run: git rm -r --cached '*.pyc' '__pycache__'"
+            exit 1
+          fi
+          echo "layout ok"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install flake8 pytest
+
+      # Only undefined names, syntax errors and broken imports block a merge.
+      # Long lines stay advisory because the config literals in raahctl.py are
+      # generated JSON, not prose, and rewrapping them by hand is error-prone.
+      - name: Lint (blocking)
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Lint (advisory)
+        run: flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Check shell syntax
+        run: |
+          bash -n one-click-install.sh
+          bash -n scripts/install-unit.sh
+          bash -n scripts/port-hop.sh
+
+      - name: Compile and test
+        run: |
+          python -m py_compile raahctl.py tests/test_raahctl.py tests/ci_generate_bundle.py
+          python -m pytest -v
+
+      - name: Install official sing-box package
+        run: |
+          curl -fsSL https://sing-box.app/gpg.key | sudo tee /etc/apt/keyrings/sagernet.asc >/dev/null
+          echo 'deb [signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *' | sudo tee /etc/apt/sources.list.d/sagernet.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends sing-box openssl
+
+      # sing-box check is what actually catches a malformed `server_ports`
+      # range. Without it a config that sing-box refuses to load can still be
+      # committed, because `sing-box check` is the only real validator.
+      - name: Validate every generated config with sing-box
+        run: |
+          mkdir -p build/ci-tls
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=outside.example.com' \
+            -keyout build/ci-tls/privkey.pem -out build/ci-tls/fullchain.pem
+          python tests/ci_generate_bundle.py \
+            --out build/ci-bundle \
+            --cert "$PWD/build/ci-tls/fullchain.pem" \
+            --key "$PWD/build/ci-tls/privkey.pem"
+          checked=0
+          while IFS= read -r -d '' config; do
+            echo "sing-box check $config"
+            sing-box check -c "$config"
+            checked=$((checked + 1))
+          done < <(find build/ci-bundle -type f -name '*.json' ! -name secrets.json ! -name '*.install.json' -print0)
+          test "$checked" -gt 0 || { echo 'no configs were generated'; exit 1; }
+          hops=0
+          while IFS= read -r -d '' metadata; do
+            echo "port-hop check $metadata"
+            bash scripts/port-hop.sh check "$metadata"
+            hops=$((hops + 1))
+          done < <(find build/ci-bundle -type f -name '*.install.json' -print0)
+          test "$hops" -gt 0 || { echo 'no install metadata was generated'; exit 1; }

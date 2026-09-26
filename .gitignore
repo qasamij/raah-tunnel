@@ -1,0 +1,17 @@
+private-bundle/
+out/
+*.secret.json
+*.private.json
+*.install.json
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+raah-private-bundle/
+private-*/
+iran-*.json
+outside.json
+reverse-*.json
+secrets.json
+client-linux.json

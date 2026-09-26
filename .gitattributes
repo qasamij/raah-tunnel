@@ -1,0 +1,14 @@
+# This project targets Ubuntu. A shell script committed with CRLF endings fails
+# on the first line with `bad interpreter: /usr/bin/env bash^M`, so force LF for
+# every text file regardless of what a contributor's editor or core.autocrlf
+# would otherwise produce.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.pem text eol=lf
+*.service text eol=lf
