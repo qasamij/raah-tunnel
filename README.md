@@ -68,7 +68,17 @@ curl -fsSL https://raw.githubusercontent.com/qasamij/raah-tunnel/main/one-click-
 sudo bash /tmp/raah-install.sh --menu
 ```
 
-Pick **option 1** ("Generate direct bundle"). When the wizard asks:
+Pick the option that matches the machine you are logged into right now:
+
+| This machine is | Pick |
+| --- | --- |
+| the **Iran** server | **1** (IRAN server) |
+| the **Outside** server | **2** (OUTSIDE server) |
+
+The first time, no bundle exists yet and the installer asks before creating
+one, because both servers must share the same keys. Answer `generate` to
+continue. On the second server the bundle is already there, so the installer
+reuses it instead of minting a new one. When the wizard asks:
 
 - For "Outside server PUBLIC IP", give the **outside** server's IP.
 - For "Iran server PUBLIC IP", give the **Iran** server's IP.
@@ -141,8 +151,8 @@ On either server, the menu shows whether the service is alive:
 sudo raah-install --menu
 ```
 
-- **Option 5** — service status
-- **Option 7** — end-to-end probe; point it at `client-linux.json` to test the
+- **5** — service status
+- **6** — end-to-end probe; point it at `client-linux.json` to test the
   whole path (your server → Iran → outside → the internet). This is the check
   that tells you the tunnel genuinely carries traffic.
 
@@ -154,8 +164,7 @@ that will use the tunnel. It is for a `sing-box` client with TUN support.
 | Symptom | Try |
 | --- | --- |
 | `Could not download ... over git or HTTPS` | The installer already retried over an archive. Check this server's internet. |
-| Service will not start | Option 5. A missing TLS certificate is the usual cause. |
-| Probe fails but services are up | Ports are not open, or the client file is stale. |
+| Service will not start | Option 5. A missing TLS certificate is the usual cause. || Probe fails but services are up | Ports are not open, or the client file is stale. |
 | Everything worked on another network but not yours | Open **both** TCP and UDP for the full port range. |
 
 ## Everything else
@@ -213,7 +222,7 @@ The helper does not open firewall ports or restart x-ui. For port hopping it doe
 
 The default Outside REALITY base port is TCP/7788 and the default Iran REALITY base port is TCP/8877. If you enter several SNIs, Raah uses the next ports in order, for example Outside `7788, 7789, 7790` and Iran `8877, 8878, 8879`.
 
-Advanced mode asks for separate Outside/Iran `urltest` URLs and the health interval. The default URL is `https://cp.cloudflare.com/generate_204`; use menu option 8 to change it if that endpoint is unreliable on either real path. Use `10s` for more aggressive failover checks or the calmer default `15s`.
+Advanced mode asks for separate Outside/Iran `urltest` URLs and the health interval. The default URL is `https://cp.cloudflare.com/generate_204`; use menu option 7 to change it if that endpoint is unreliable on either real path. Use `10s` for more aggressive failover checks or the calmer default `15s`.
 
 ## Design
 
@@ -255,7 +264,7 @@ User lifecycle and quotas belong in x-ui/3x-ui. The legacy `add-user`, `list-use
 
 `edit-bundle` interactively updates addresses, transport ports, per-side REALITY SNI pools, per-side health URLs, and Hysteria2 hopping. It locks the bundle, creates a private timestamped backup, keeps only the newest three backups, preserves keys and credentials, and regenerates all matching server, metadata, and client files from `secrets.json`. Reinstall each affected server JSON together with its matching `.install.json`, then redistribute updated client profiles.
 
-After the first installation, open the menu with `sudo raah-install --menu`. Option 9 updates to the newest published stable `v*` tag. Option 10 removes the Raah service, `/etc/raah`, the installed checkout and launcher after an explicit confirmation; deletion of `/root/raah-private-bundle` requires a second confirmation. The shared sing-box package is intentionally retained.
+After the first installation, open the menu with `sudo raah-install --menu`. Option 8 updates to the newest published stable `v*` tag. Option 9 removes the Raah service, `/etc/raah`, the installed checkout and launcher after an explicit confirmation; deletion of `/root/raah-private-bundle` requires a second confirmation. The shared sing-box package is intentionally retained.
 
 ## Security and operating notes
 

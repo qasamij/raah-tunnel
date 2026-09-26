@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Reorganised the one-click menu around the question a beginner actually has: **which server am I logged into?** Options 1 and 2 are now "IRAN server" and "OUTSIDE server", and each one generates the bundle if needed, installs the matching config, and prints the exact commands for the *other* server. The old "Generate direct bundle" wording is gone.
+- The menu closed at `Select [0-9, h]`; it previously advertised a range it did not accept.
+- Both servers' halves are written together because they must share keys, so the role setup now asks before generating a bundle and says out loud which file it is about to install. A second bundle is never minted on the peer server.
+- Detects a bundle by *either* half. Previously a folder holding only `iran-01.json` was treated as no bundle at all, so the installer would have generated fresh keys and silently broken the pair.
+- A bundle missing the half this server needs is reported as a restore-the-folder error instead of being regenerated over.
+- The peer-server instructions named the wrong config file when setup ran on the Iran server, telling the user to install `iran-01.json` on both machines.
+- Role setup forwards `--auto-sni`, `--no-discovery` and `--hop`/`--no-hop` to the generator. It rebuilt the generate command from scratch and silently dropped whichever of those the user had passed.
+- Wizard prompts fall back to stdin when there is no controlling terminal. The unconditional `</dev/tty` redirect aborted the whole installer under `ssh host 'command'`, in CI, and from cron.
+- The docs quote menu numbers, and a stale number means a beginner presses the wrong thing on a live server. English and Persian guides now match the new menu, and the checks are automated so the two cannot drift again.
+
 ## 0.11.0
 
 - Added coordinated Hysteria2 UDP port hopping: client `server_ports`/`hop_interval`, per-server install metadata, and an isolated nftables DNAT service.

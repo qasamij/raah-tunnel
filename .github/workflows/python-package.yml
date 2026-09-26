@@ -24,7 +24,7 @@ jobs:
       # which surfaces much later as an unrelated exit code 127 from bash.
       - name: Verify repository layout
         run: |
-          for f in raahctl.py one-click-install.sh scripts/install-unit.sh scripts/port-hop.sh tests/test_raahctl.py tests/ci_generate_bundle.py; do
+          for f in raahctl.py one-click-install.sh scripts/install-unit.sh scripts/port-hop.sh tests/test_raahctl.py tests/ci_generate_bundle.py tests/test-menu.sh tests/test-docs.sh; do
             if [ ! -f "$f" ]; then
               echo "::error::missing $f -- the repository layout is flattened or incomplete"
               exit 1
@@ -55,6 +55,15 @@ jobs:
           bash -n one-click-install.sh
           bash -n scripts/install-unit.sh
           bash -n scripts/port-hop.sh
+
+      # The menu is the only interface a beginner has. These checks encode the
+      # failures that hurt a real user: a menu number the docs contradict, a
+      # role setup that mints a second bundle and breaks the key pair, and a
+      # first run that dies before printing the one instruction needed.
+      - name: Check menu and docs behaviour
+        run: |
+          bash tests/test-menu.sh
+          bash tests/test-docs.sh
 
       - name: Compile and test
         run: |

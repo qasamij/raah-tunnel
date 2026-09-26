@@ -15,6 +15,17 @@ NO_DISCOVERY=0
 HOP_ARG=""
 RUNTIME_ROOT=""
 
+# The interactive wizard must read from the real terminal even when this script's
+# stdin is a pipe, which is the normal case from the menu. Where there is no
+# controlling terminal at all (a bare `ssh host 'command'`, a CI runner, a cron
+# job) /dev/tty cannot be opened and the redirect would abort the whole
+# installer, so fall back to stdin and let the wizard read what it is given.
+if [[ -e /dev/tty ]] && : </dev/tty 2>/dev/null; then
+  TTY_IN=/dev/tty
+else
+  TTY_IN=/dev/stdin
+fi
+
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '\n==> %s\n' "$*"; }
 cleanup() {
@@ -193,13 +204,19 @@ usage() {
   cat <<'EOF'
 Raah Tunnel | Iran / Outside | qasamij
 
-First server / trusted setup host (download dependencies and create one shared bundle):
+FIRST TIME, on either server, tell the installer what this machine is:
   sudo bash one-click-install.sh --menu
-  sudo bash one-click-install.sh --generate [--mode direct|reverse|both] [--auto-sni]
+  then pick "1) IRAN server" or "2) OUTSIDE server"
 
-Install one file from that bundle on its matching server:
-  sudo bash one-click-install.sh --config /root/raah-private-bundle/outside.json --start
-  sudo bash one-click-install.sh --config /root/raah-private-bundle/iran-01.json --start
+The two servers must share one bundle, because the configs hold matching keys.
+The role-based setup above mints it once and tells you how to copy it over.
+
+Manually, if you prefer:
+  create the shared bundle:
+    sudo bash one-click-install.sh --generate [--mode direct|reverse|both] [--auto-sni]
+  install one file from that bundle on its matching server:
+    sudo bash one-click-install.sh --config /root/raah-private-bundle/outside.json --start
+    sudo bash one-click-install.sh --config /root/raah-private-bundle/iran-01.json --start
 
 Options:
   --generate       Run the interactive Raah bundle generator after installation.
@@ -216,49 +233,189 @@ Options:
 EOF
 }
 
+role_config() {
+  case "$1" in
+    iran) printf 'iran-01.json\n' ;;
+    outside) printf 'outside.json\n' ;;
+    *) die "Unknown role: $1" ;;
+  esac
+}
+
+# One bundle holds the keys for BOTH servers, so it must be created once and
+# copied. Minting a second one on the other server silently produces a pair that
+# cannot talk to each other, so ask before generating when the answer is not
+# obviously yes, and always say out loud which half is being installed here.
+setup_role() {
+  local role="$1" bundle="/root/raah-private-bundle" want other_role other answer cfg prepared=0
+  want="$(role_config "$role")"
+  # Keep the lowercase name for role_config and the uppercase one for the text:
+  # conflating them once printed "--config /root/ --start" with no filename.
+  if [[ "$role" == iran ]]; then other_role=outside; other=OUTSIDE; else other_role=iran; other=IRAN; fi
+
+  # $RAAHCTL and $UNIT_SCRIPT are only set by prepare_environment, and this
+  # script runs under "set -u". Reaching the install step without it would abort
+  # the whole installer, so prepare exactly once, whichever branch we take.
+  ensure_ready() {
+    [[ "$prepared" -eq 1 ]] && return 0
+    prepare_environment || return 1
+    prepared=1
+  }
+
+  printf '\n'
+  printf '  This server will act as the %s server.\n' "$role"
+  printf '  It will install:  %s\n' "$want"
+  printf '  Bundle location:  %s\n' "$bundle"
+  printf '\n'
+
+  if [[ -f "$bundle/$want" ]]; then
+    info "Using the existing $bundle/$want; its keys are shared with the other server"
+  elif [[ -f "$bundle/outside.json" || -f "$bundle/iran-01.json" ]]; then
+    # A bundle is a pair. Seeing only one half still means the keys already
+    # exist, so refuse to mint a second set that could never match the peer.
+    info "A bundle already exists in $bundle, so its keys will be reused"
+    if [[ ! -f "$bundle/$want" ]]; then
+      die "$bundle/$want is missing from the existing bundle. Restore the whole folder from the server that made it; do not generate a new one."
+    fi
+  else
+    cat <<EOF
+  No bundle found in $bundle.
+
+  Raah writes both servers' configs together because they have to share the
+  same keys. Create it ONCE here, then copy the whole folder to the $other
+  server.
+
+  If a bundle already exists on another machine, stop and copy it instead:
+      scp -r <that-host>:${bundle} ${bundle}
+
+EOF
+    printf "  Type 'generate' to create a new bundle here: "
+    read -r answer || { printf '  Nothing was changed.\n'; return 0; }
+    case "$answer" in
+      generate|yes|y) ;;
+      *) printf '  Nothing was changed.\n'; return 0 ;;
+    esac
+    ensure_ready || return 1
+    local gen_args=(generate --mode direct --out "$bundle")
+    [[ "$AUTO_SNI" -eq 0 ]] || gen_args+=(--auto-sni)
+    [[ "$NO_DISCOVERY" -eq 0 ]] || gen_args+=(--no-discovery)
+    [[ -z "$HOP_ARG" ]] || gen_args+=("$HOP_ARG")
+    if ! python3 "$RAAHCTL" "${gen_args[@]}" <"$TTY_IN"; then
+      die "Bundle generation failed."
+    fi
+  fi
+
+  cfg="$bundle/$want"
+  [[ -f "$cfg" ]] || die "Expected $cfg but it is not there."
+
+  ensure_ready || return 1
+  info "Installing $cfg on this server"
+
+  # install-unit.sh lists the exact files it needs and exits non-zero when they
+  # are absent. On a first run they are always absent, so treat this as the
+  # normal next step instead of killing the installer: the bundle is already
+  # generated, and the user only has to supply TLS and press the same option.
+  if ! bash "$UNIT_SCRIPT" "$cfg"; then
+    printf '\n  Nothing was installed, so nothing was changed.\n'
+    printf '  The config is generated and waiting at:\n      %s\n' "$cfg"
+    printf '\n  To finish, put the TLS certificate and key on THIS server at the\n'
+    printf '  paths listed above (normally /etc/raah/tls/), then choose this same\n'
+    printf '  option again. The rest of the setup is already done.\n'
+    printf '\n  The bundle stays at %s. Never put its contents on GitHub.\n' "$bundle"
+    return 0
+  fi
+
+  if [[ -f "${cfg%.json}.install.json" ]]; then
+    info "Deploy metadata for this server: ${cfg%.json}.install.json"
+    printf '  Keep it next to %s if you copy this file to another host.\n' "$want"
+  fi
+
+  systemctl enable raah-sing-box >/dev/null 2>&1 || true
+  # Do not let a failed restart abort the installer: the config is already in
+  # place, and the user needs to see the remaining steps to finish the job.
+  if ! systemctl restart raah-sing-box; then
+    printf '\n  The config is installed, but the service did not start.\n'
+    printf '  Check: systemctl --no-pager status raah-sing-box\n'
+  else
+    systemctl --no-pager --full status raah-sing-box || true
+  fi
+
+  printf '\n  This server is set up as %s. Remaining work:\n' "$role"
+  printf '  1. Make sure a valid TLS cert+key is on this server in /etc/raah/tls/\n'
+  printf '  2. Open every port listed in %s/DEPLOY.txt in BOTH the provider\n' "$bundle"
+  printf '     panel and ufw (allow the full UDP range, not just one port).\n'
+  printf '  3. Copy this whole folder to the %s server, then install its half:\n' "$other"
+  printf '       scp -r %s root@<%s_PUBLIC_IP>:/root/\n' "$bundle" "$other"
+  printf '       ssh root@<%s_PUBLIC_IP>\n' "$other"
+  printf '       sudo bash /tmp/raah-install.sh --config /root/%s --start\n' "$(role_config "$other_role")"
+  printf '  4. Copy %s/client-linux.json to the device that uses the tunnel.\n' "$bundle"
+  printf '  5. Verify: option 6 runs an end-to-end test through both servers.\n'
+  printf '\n  Never put the contents of %s on GitHub.\n' "$bundle"
+}
+
+# Advanced path: build a bundle without installing anything here. Direct mode is
+# covered by the role-based setup, so only the other topologies are offered.
+build_bundle() {
+  local choice bundle="/root/raah-private-bundle"
+  printf '\n  Which topology?\n'
+  printf '  2) Reverse  traffic enters OUTSIDE and leaves via IRAN\n'
+  printf '  3) Both     build direct and reverse side by side\n'
+  printf '  0) Cancel\n'
+  printf '  Select [0-3]: '
+  read -r choice || return 0
+  case "$choice" in
+    2) MODE=reverse ;;
+    3) MODE=both ;;
+    *) printf '  Nothing was changed.\n'; return 0 ;;
+  esac
+  prepare_environment || return 1
+  if python3 "$RAAHCTL" generate --mode "$MODE" --out "$bundle" <"$TTY_IN"; then
+    next_steps "$bundle" "$MODE"
+  fi
+}
+
 menu() {
   local choice node_file client_file bundle_path
   while true; do
     printf '\n========================================\n'
-    printf 'RAAH TUNNEL  |  IRAN / OUTSIDE\n'
-    printf 'qasamij  |  github.com/qasamij/raah-tunnel\n'
+    printf ' RAAH TUNNEL   |   qasamij/raah-tunnel\n'
     printf '========================================\n'
-    printf '1) Generate direct tunnel: Iran to Outside\n'
-    printf '2) Generate reverse tunnel: Outside to Iran\n'
-    printf '3) Generate both modes\n'
-    printf '4) Install config on this server\n'
-    printf '5) Service status\n'
-    printf '6) Help\n'
-    printf '7) End-to-end client probe\n'
-    printf '8) Safely edit an existing bundle\n'
-    printf '9) Update Raah to the latest stable release\n'
-    printf '10) Uninstall Raah completely\n'
-    printf '0) Exit\n'
+    printf '\n'
+    printf '  SETUP - what is THIS server?\n'
+    printf '    1) IRAN server      (entry point your users connect to)\n'
+    printf '    2) OUTSIDE server   (exit node that reaches the internet)\n'
+    printf '\n'
+    printf '  MORE SETUP\n'
+    printf '    3) Install a config file on this server\n'
+    printf '    4) Build a bundle for another topology (reverse / both)\n'
+    printf '\n'
+    printf '  OPERATIONS\n'
+    printf '    5) Service status\n'
+    printf '    6) Test the tunnel end to end\n'
+    printf '    7) Edit an existing bundle\n'
+    printf '    8) Update to the latest release\n'
+    printf '    9) Uninstall Raah completely\n'
+    printf '\n'
+    printf '    h) Help\n'
+    printf '    0) Exit\n'
+    printf '\n'
     printf '========================================\n'
-    read -r -p 'Select [0-10]: ' choice || return 0
+    read -r -p 'Select [0-9, h]: ' choice || return 0
     case "$choice" in
-      1|2|3)
-        case "$choice" in 1) MODE=direct ;; 2) MODE=reverse ;; 3) MODE=both ;; esac
-        local args=(generate --mode "$MODE" --out /root/raah-private-bundle)
-        [[ "$AUTO_SNI" -eq 0 ]] || args+=(--auto-sni)
-        [[ "$NO_DISCOVERY" -eq 0 ]] || args+=(--no-discovery)
-        [[ -z "$HOP_ARG" ]] || args+=("$HOP_ARG")
-        if prepare_environment; then
-          if python3 "$RAAHCTL" "${args[@]}" </dev/tty; then
-            next_steps /root/raah-private-bundle "$MODE"
-          fi
-        fi ;;
-      4)
-        printf 'Outside server config: outside.json\nIran server config: iran-01.json\n'
-        read -r -p 'Config path: ' node_file
+      1) setup_role iran ;;
+      2) setup_role outside ;;
+      3)
+        printf '\n  Which file belongs on this server?\n'
+        printf '    IRAN entry    ->  iran-01.json\n'
+        printf '    OUTSIDE exit  ->  outside.json\n'
+        read -r -p '  Config path: ' node_file
         if [[ -f "$node_file" ]]; then
           if prepare_environment; then
             bash "$UNIT_SCRIPT" "$node_file" && { systemctl enable raah-sing-box; systemctl restart raah-sing-box; }
           fi
         else printf 'Config file not found.\n' >&2; fi ;;
+      4) build_bundle ;;
       5) systemctl --no-pager status raah-sing-box raah-port-hop || true ;;
-      6) usage ;;
-      7)
+      6)
         read -r -p 'Client config path [/root/raah-private-bundle/client-linux.json]: ' client_file
         client_file="${client_file:-/root/raah-private-bundle/client-linux.json}"
         if [[ -f "$client_file" ]]; then
@@ -266,15 +423,15 @@ menu() {
             python3 "$RAAHCTL" e2e-probe "$client_file" --count 3
           fi
         else printf 'Client config file not found.\n' >&2; fi ;;
-      8)
+      7)
         read -r -p 'Bundle path [/root/raah-private-bundle]: ' bundle_path
         bundle_path="${bundle_path:-/root/raah-private-bundle}"
         if [[ -d "$bundle_path" ]]; then
           if prepare_environment; then
-            python3 "$RAAHCTL" edit-bundle "$bundle_path" </dev/tty
+            python3 "$RAAHCTL" edit-bundle "$bundle_path" <"$TTY_IN"
           fi
         else printf 'Bundle directory not found.\n' >&2; fi ;;
-      9)
+      8)
         local newest
         prepare_environment
         newest="$(latest_release_ref)"
@@ -285,11 +442,12 @@ menu() {
             REF="$newest"
             prepare_environment
           fi
-          printf 'Raah updated to %s. Run: sudo raah-install --menu\n' "$REF"
+          printf 'Raah updated to %s.\n' "$REF"
         fi ;;
-      10) uninstall_raah; return 0 ;;
+      9) uninstall_raah; return 0 ;;
+      h|H) usage ;;
       0) return 0 ;;
-      *) printf 'Invalid option. Enter a number from 0 to 10.\n' >&2 ;;
+      *) printf 'Invalid option. Enter 0-9, or h for help.\n' >&2 ;;
     esac
   done
 }
@@ -421,7 +579,7 @@ if [[ "$GENERATE" -eq 1 ]]; then
   [[ "$AUTO_SNI" -eq 0 ]] || args+=(--auto-sni)
   [[ "$NO_DISCOVERY" -eq 0 ]] || args+=(--no-discovery)
   [[ -z "$HOP_ARG" ]] || args+=("$HOP_ARG")
-  python3 "$RAAHCTL" "${args[@]}" </dev/tty
+  python3 "$RAAHCTL" "${args[@]}" <"$TTY_IN"
   next_steps "$bundle" "$MODE"
 fi
 
