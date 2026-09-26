@@ -36,40 +36,134 @@ The generated client profile is for `sing-box` clients with TUN support. Proxies
 
 ## Quick start
 
-Requirements: Ubuntu 22.04/24.04 or newer, root access, and sing-box 1.14 or newer. The automatic installer downloads Git, Python, required tools, Raah, and the official `sing-box` package from its signed APT repository. Hysteria 2 still requires a valid certificate and key.
+This section is the shortest path from zero to a working tunnel. Follow the six
+steps in order. Everything after it is optional detail.
+
+### What you need first
+
+| Thing | Why |
+| --- | --- |
+| **Two** Linux servers (VPS) | Raah is server-to-server. You cannot run it on one machine. |
+| Ubuntu 22.04/24.04 on both, with `root` access | The installer creates system services. |
+| A domain name **plus** a TLS certificate for the outside server | Required by Hysteria 2. A bare IP address is not enough. |
+| About 20 minutes | Mostly waiting for downloads. |
+
+You do not have to install `sing-box`, `git`, or Python yourself. The installer
+pulls them in, including `sing-box` 1.14+ from its signed APT repository.
+
+Decide which server is which, and keep the names straight:
+
+- **Outside server** — the machine that receives your traffic and sends it out to
+  the internet. Usually a cheap VPS in a nearby country.
+- **Iran server** — the entry point your clients connect to. This is the machine
+  in Iran, and its IP is the one your friends will point their client at.
+
+### Step 1 — Build the config bundle
+
+Do this **once**, on one of the two servers. It produces a matched set of files
+that both servers must share, so the two halves can talk to each other.
 
 ```bash
-git clone https://github.com/qasamij/raah-tunnel.git
-cd raah-tunnel
-python3 raahctl.py generate --out ./private-bundle
-python3 raahctl.py edit-bundle ./private-bundle
-```
-
-### One-click node install
-
-On the first trusted server, download the installer and create the shared pair bundle:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/qasamij/raah-tunnel/main/one-click-install.sh -o /tmp/raah-install.sh && \
+curl -fsSL https://raw.githubusercontent.com/qasamij/raah-tunnel/main/one-click-install.sh -o /tmp/raah-install.sh
 sudo bash /tmp/raah-install.sh --menu
 ```
 
-Choose bundle generation from the English/ASCII menu. Generate the pair only once. For direct mode, transfer only `outside.json` to the outside server and `iran-01.json` to the Iran server. Install on the **outside server**:
+Pick **option 1** ("Generate direct bundle"). When the wizard asks:
+
+- For "Outside server PUBLIC IP", give the **outside** server's IP.
+- For "Iran server PUBLIC IP", give the **Iran** server's IP.
+- If a prompt shows a value in `[square brackets]`, pressing Enter accepts it.
+- If the TLS certificate domain looks wrong, type your own instead.
+
+The files land in `/root/raah-private-bundle/`. The two you care about:
+
+- `outside.json` → goes to the **outside** server
+- `iran-01.json` → goes to the **Iran** server
+
+### Step 2 — Put a TLS certificate on both servers
+
+Hysteria 2 refuses to start without a valid certificate, so this is the one step
+you cannot automate. Get a real certificate for your outside domain, then on
+**each** server create:
+
+```
+/etc/raah/tls/fullchain.pem
+/etc/raah/tls/privkey.pem
+```
+
+If you do not have a domain and certificate yet, stop here and get one first.
+Nothing else will work without it.
+
+### Step 3 — Install on the outside server
 
 ```bash
 sudo bash /tmp/raah-install.sh --config /root/raah-private-bundle/outside.json --start
 ```
 
-Install on the **Iran server**:
+If `outside.json` is on a different machine, copy it across first:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/qasamij/raah-tunnel/main/one-click-install.sh -o /tmp/raah-install.sh
+scp /root/raah-private-bundle/outside.json root@OUTSIDE_IP:/root/outside.json
+```
+
+### Step 4 — Install on the Iran server
+
+```bash
 sudo bash /tmp/raah-install.sh --config /root/raah-private-bundle/iran-01.json --start
 ```
 
-Copy each private JSON via SCP to the stated path or adjust the path in the command. Never publish it. The installer downloads Ubuntu dependencies, the repository, and official sing-box; valid TLS certificates and firewall rules are still required. Raah does not automatically route existing x-ui inbounds through its transport. Configure panel routing separately.
+Same deal: if the file is not on this machine, `scp` it over and point
+`--config` at wherever you put it.
 
-Generate direct, reverse, or both bundles:
+### Step 5 — Open the ports
+
+Raah never touches your firewall for you. The bundle contains a `DEPLOY.txt`
+listing exactly which ports to open. On **both** servers, open those ports in
+**two** places:
+
+1. The provider's control panel (Hetzner, DigitalOcean, Contabo, …)
+2. `ufw` on the machine itself
+
+To see the list for a given config:
+
+```bash
+python3 /opt/raah-tunnel/raahctl.py firewall-plan /root/raah-private-bundle/outside.json
+```
+
+Defaults, if you never changed them: **UDP 8443** (Hysteria 2) and **TCP 7788**
+outside / **TCP 8877** Iran (REALITY).
+
+### Step 6 — Check that it works
+
+On either server, the menu shows whether the service is alive:
+
+```bash
+sudo raah-install --menu
+```
+
+- **Option 5** — service status
+- **Option 7** — end-to-end probe; point it at `client-linux.json` to test the
+  whole path (your server → Iran → outside → the internet). This is the check
+  that tells you the tunnel genuinely carries traffic.
+
+Then copy `client-linux.json` from `/root/raah-private-bundle/` to the device
+that will use the tunnel. It is for a `sing-box` client with TUN support.
+
+### If something goes wrong
+
+| Symptom | Try |
+| --- | --- |
+| `Could not download ... over git or HTTPS` | The installer already retried over an archive. Check this server's internet. |
+| Service will not start | Option 5. A missing TLS certificate is the usual cause. |
+| Probe fails but services are up | Ports are not open, or the client file is stale. |
+| Everything worked on another network but not yours | Open **both** TCP and UDP for the full port range. |
+
+## Everything else
+
+You do not need any of this to get running. It is here when you outgrow the
+steps above.
+
+### Generate different topologies
 
 ```bash
 python3 raahctl.py generate --mode direct --out ./private-bundle
