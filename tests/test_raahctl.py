@@ -253,6 +253,10 @@ class BashGlobTests(unittest.TestCase):
         url = self._strip_suffix(url, ".git")
         url = self._strip_prefix(url, "*://")
         url = self._strip_prefix(url, "*@")
+        # Mirrors ${url//:/\/}: an SSH remote has no "://" to strip, so its
+        # "host:path" separator has to become a slash before "#*/" can find the
+        # host boundary instead of the owner segment.
+        url = url.replace(":", "/")
         url = self._strip_prefix(url, "*/")
         url = self._strip_suffix(url, "/")
         owner = self._strip_suffix(url, "/*")
@@ -298,6 +302,18 @@ class BashGlobTests(unittest.TestCase):
             self.repo_slug("https://github.com/qasamij/raah-tunnel.git/"),
             "qasamij/raah-tunnel",
         )
+
+    def test_slug_handles_scp_style_ssh_remotes(self):
+        # "git@host:owner/repo.git" has no "://", so a "#*/" strip that runs
+        # before the ':' -> '/' rewrite eats the owner and returns
+        # "raah-tunnel/raah-tunnel". Caught by running the real function in
+        # bash; the model above has to agree with it.
+        for url in (
+            "git@github.com:qasamij/raah-tunnel.git",
+            "git@github.com:qasamij/raah-tunnel",
+            "ssh://git@github.com/qasamij/raah-tunnel.git",
+        ):
+            self.assertEqual(self.repo_slug(url), "qasamij/raah-tunnel", url)
 
     def test_codeload_url_built_from_the_slug(self):
         slug = self.repo_slug("https://github.com/qasamij/raah-tunnel.git")

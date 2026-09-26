@@ -76,6 +76,11 @@ repo_slug() {
   url="${url%.git}"
   url="${url#*://}"
   url="${url#*@}"
+  # An SSH remote separates the host from the path with ':' and has no '://' to
+  # strip, so "#*/" below would eat the owner segment instead of the host and
+  # yield "raah-tunnel/raah-tunnel". Normalise the separator first. A port
+  # number cannot reach here, because the caller only accepts an https URL.
+  url="${url//:/\/}"
   url="${url#*/}"
   url="${url%/}"
   printf '%s/%s\n' "${url%/*}" "${url##*/}"
