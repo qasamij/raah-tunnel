@@ -1,16 +1,55 @@
 # Changelog
 
+**[English](CHANGELOG.md)** · **[فارسی](CHANGELOG.fa.md)** · [LICENSE](LICENSE) · [README](README.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [PROTOCOLS](docs/PROTOCOLS.md)
+
+All notable changes to this project are recorded here. Both files are kept in
+step: the English and Persian changelogs always carry the same releases and the
+same entries, and `tests/test-docs.sh` fails if they drift apart.
+
+Releases older than **0.11.0** are recorded here only; the Persian changelog
+starts at 0.11.0. Everything listed in `CHANGELOG.fa.md` is also listed here.
+
 ## Unreleased
 
-- Reorganised the one-click menu around the question a beginner actually has: **which server am I logged into?** Options 1 and 2 are now "IRAN server" and "OUTSIDE server", and each one generates the bundle if needed, installs the matching config, and prints the exact commands for the *other* server. The old "Generate direct bundle" wording is gone.
-- The menu closed at `Select [0-9, h]`; it previously advertised a range it did not accept.
-- Both servers' halves are written together because they must share keys, so the role setup now asks before generating a bundle and says out loud which file it is about to install. A second bundle is never minted on the peer server.
-- Detects a bundle by *either* half. Previously a folder holding only `iran-01.json` was treated as no bundle at all, so the installer would have generated fresh keys and silently broken the pair.
-- A bundle missing the half this server needs is reported as a restore-the-folder error instead of being regenerated over.
-- The peer-server instructions named the wrong config file when setup ran on the Iran server, telling the user to install `iran-01.json` on both machines.
-- Role setup forwards `--auto-sni`, `--no-discovery` and `--hop`/`--no-hop` to the generator. It rebuilt the generate command from scratch and silently dropped whichever of those the user had passed.
-- Wizard prompts fall back to stdin when there is no controlling terminal. The unconditional `</dev/tty` redirect aborted the whole installer under `ssh host 'command'`, in CI, and from cron.
-- The docs quote menu numbers, and a stale number means a beginner presses the wrong thing on a live server. English and Persian guides now match the new menu, and the checks are automated so the two cannot drift again.
+### The install menu now asks which server you are on
+
+The menu used to ask "which topology?", which is the wrong first question for
+someone setting the project up for the first time. The question that actually
+matters is "which machine am I logged into?", because the answer decides which
+half of the bundle belongs here.
+
+- Options 1 and 2 are now **IRAN server** and **OUTSIDE server**. Each one creates the bundle if it is missing, installs the matching config, and prints the exact commands for the *other* server. The old "Generate direct tunnel" wording is gone.
+- The remaining options are regrouped: 3 install a config file, 4 build a bundle for another topology, 5 status, 6 end-to-end test, 7 edit a bundle, 8 update, 9 uninstall, `h` help, `0` exit.
+- The menu closed at `Select [0-9, h]`; it previously advertised `[0-10]`, a range it did not accept, and rejected `h` even though the old help option was numbered 6.
+- Both guides now tell the reader to pick option 1 or 2 to match the machine in front of them, instead of referring to a "Generate direct bundle" entry that no longer exists.
+
+### A bundle can no longer be minted twice
+
+The two servers must share keys, so the generator writes both halves in one
+go and the folder is copied to the peer. Everything below is a case where that
+invariant was broken silently.
+
+- Role setup asks before creating a bundle, and states out loud which file it is about to install.
+- A bundle is now recognised by *either* half. A folder holding only `iran-01.json` used to count as no bundle at all, so the installer would generate fresh keys and the two servers would stop matching with no error anywhere.
+- A bundle that is missing the half this server needs is reported as a restore-the-folder error instead of being regenerated over.
+- The peer-server instructions named the wrong file when setup ran on the Iran server, telling the reader to install `iran-01.json` on both machines.
+- The peer instructions now copy the whole folder rather than a single config, because `install-unit.sh` also needs the matching `.install.json` metadata.
+
+### Failures that stopped a first-time user dead
+
+- `install-unit.sh` exits non-zero when the TLS files are missing, which on a fresh server is always. Role setup turned that into a fatal error, so the reader was thrown out of the installer *before* being told the one thing they had to do next. It now reports what is missing, confirms that nothing was changed, and hands control back so the same option can be repeated once the certificate is in place.
+- A failed `systemctl restart` no longer aborts the installer under `set -e`; the remaining steps are still printed, because the config is already installed at that point.
+- The lower-case and upper-case role names were conflated, which printed `--config /root/ --start` with no filename at all. The two are now separate variables.
+- Role setup rebuilt the generate command from scratch and silently dropped `--auto-sni`, `--no-discovery` and `--hop`/`--no-hop`, so a flag the user had explicitly passed had no effect.
+- Wizard prompts read from `/dev/tty` unconditionally. That aborts the whole installer under `ssh host 'command'`, in CI, and from cron, because there is no controlling terminal to open. Prompts now fall back to stdin.
+
+### Testability and the release checks
+
+- The bundle location is now the single `BUNDLE_DIR` variable, defaulting to `/root/raah-private-bundle` and overridable with `RAAH_BUNDLE`. The setup paths, the menu prompts and the uninstall prompt can no longer disagree about where the credentials live.
+- `tests/test-menu.sh` and `tests/test-docs.sh` are new and run in CI. They cover the cases that hurt a real user: a menu number the documentation contradicts, a role setup that mints a second bundle, an empty config filename, a first run that dies before printing the next instruction, and a failed restart that takes the installer with it.
+- The documentation check derives the menu from the source and compares it against every option number quoted in both guides, so a stale number fails the build instead of sending a beginner to the wrong menu entry on a live server.
+- The new suites initially wrote to the product's default bundle path under `/root`, which a GitHub Actions runner cannot write, so they passed on a workstation and failed in CI. They now use a private temporary directory and clean up after themselves.
+
 
 ## 0.11.0
 

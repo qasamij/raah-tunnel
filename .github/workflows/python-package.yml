@@ -30,6 +30,14 @@ jobs:
               exit 1
             fi
           done
+          # Every language pair has to ship together, or half the readers get a
+          # 404 on the document they are linked to.
+          for f in README.md README.fa.md CHANGELOG.md CHANGELOG.fa.md; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing $f -- English and Persian documents must both exist"
+              exit 1
+            fi
+          done
           if [ -n "$(git ls-files '*.pyc' '__pycache__/*')" ]; then
             echo "::error::compiled Python bytecode is committed; run: git rm -r --cached '*.pyc' '__pycache__'"
             exit 1

@@ -86,6 +86,81 @@ for f in README.md README.fa.md; do
 done
 
 rm -f $doc_nums
+
+# The two changelogs are maintained by hand in two languages. The Persian file
+# deliberately starts at 0.11.0, so the invariant is one-directional: anything
+# the Persian file claims must also exist in the English one, and the Persian
+# file must say where to find the older history. Demanding equal release counts
+# would only force a translation of 23 releases nobody asked for.
+echo
+echo "=== 7. the two changelogs agree where they overlap ==="
+for f in CHANGELOG.md CHANGELOG.fa.md; do
+  if [[ -f "$DOCS/$f" ]]; then ok "$f exists"; else bad "$f is missing"; fi
+done
+
+if [[ -f "$DOCS/CHANGELOG.md" && -f "$DOCS/CHANGELOG.fa.md" ]]; then
+  # Both must document the current, unreleased work.
+  for f in CHANGELOG.md CHANGELOG.fa.md; do
+    grep -qE '^## (Unreleased|منتشرنشده)' "$DOCS/$f" \
+      && ok "$f has an unreleased section" || bad "$f has no unreleased section"
+  done
+
+  # Every numbered release claimed by the Persian file must exist in English.
+  missing=""
+  while IFS= read -r v; do
+    grep -qF "$v" "$DOCS/CHANGELOG.md" || missing="$missing $v"
+  done < <(grep -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$DOCS/CHANGELOG.fa.md" | sed 's/^## //')
+  if [[ -z "$missing" ]]; then
+    ok "every release in CHANGELOG.fa.md also exists in CHANGELOG.md"
+  else
+    bad "claimed only in Persian:$missing"
+  fi
+
+  # The English file is a superset, never a subset.
+  en=$(grep -cE '^## [0-9]+\.[0-9]+\.[0-9]+' "$DOCS/CHANGELOG.md")
+  fa=$(grep -cE '^## [0-9]+\.[0-9]+\.[0-9]+' "$DOCS/CHANGELOG.fa.md")
+  [[ "$fa" -le "$en" ]] && ok "Persian covers $fa of $en releases (allowed to be fewer)" \
+                       || bad "Persian lists $fa releases but English only has $en"
+
+  # A reader who lands on the Persian file must be told the rest is English-only.
+  if grep -qF 'CHANGELOG.md' "$DOCS/CHANGELOG.fa.md"; then
+    ok "CHANGELOG.fa.md points at the English file for older releases"
+  else
+    bad "CHANGELOG.fa.md does not say where the older releases are"
+  fi
+
+  # Same number of subsections, so neither language gained or lost a topic.
+  ens=$(awk '/^## /{on=1;next} /^### /{if(on)c++} END{print c+0}' "$DOCS/CHANGELOG.md")
+  fas=$(awk '/^## /{on=1;next} /^### /{if(on)c++} END{print c+0}' "$DOCS/CHANGELOG.fa.md")
+  [[ "$ens" -eq "$fas" ]] && ok "both files have $ens subsections" \
+                         || bad "CHANGELOG.md has $ens subsections but CHANGELOG.fa.md has $fas"
+fi
+
+echo
+echo "=== 8. each language links to its own changelog and the other language ==="
+# A reader who lands on the Persian guide should not be sent to the English
+# changelog, and the switcher has to work in both directions.
+grep -qF '(CHANGELOG.fa.md)' "$DOCS/README.fa.md" \
+  && ok "README.fa.md points at CHANGELOG.fa.md" || bad "README.fa.md does not point at CHANGELOG.fa.md"
+grep -qF '(README.fa.md)' "$DOCS/README.md" \
+  && ok "README.md links to the Persian guide" || bad "README.md does not link to README.fa.md"
+grep -qF '(CHANGELOG.md)' "$DOCS/CHANGELOG.fa.md" \
+  && ok "CHANGELOG.fa.md links back to the English one" || bad "CHANGELOG.fa.md has no link to CHANGELOG.md"
+grep -qF '(CHANGELOG.fa.md)' "$DOCS/CHANGELOG.md" \
+  && ok "CHANGELOG.md links to the Persian one" || bad "CHANGELOG.md has no link to CHANGELOG.fa.md"
+
+echo
+echo "=== 9. the newest entries cover the role-based menu in both languages ==="
+for pair in "CHANGELOG.md:IRAN server" "CHANGELOG.fa.md:IRAN server"; do
+  f="${pair%%:*}"; needle="${pair#*:}"
+  grep -qF "$needle" "$DOCS/$f" && ok "$f mentions the role-based menu" \
+                               || bad "$f does not mention the role-based menu"
+done
+for f in CHANGELOG.md CHANGELOG.fa.md; do
+  grep -qE 'BUNDLE_DIR' "$DOCS/$f" && ok "$f documents BUNDLE_DIR" \
+                                 || bad "$f does not document BUNDLE_DIR"
+done
+
 echo
 echo "=================================================="
 printf '  %d passed, %d failed\n' "$pass" "$fail"

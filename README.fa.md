@@ -1,6 +1,6 @@
 # راه — تونل چندمسیرهٔ ایران ↔ خارج/مقصد
 
-**[English](README.md)** · **فارسی** · [LICENSE](LICENSE) · [CHANGELOG](CHANGELOG.md) · [معماری](docs/ARCHITECTURE.md) · [پروتکل‌ها](docs/PROTOCOLS.md)
+**[English](README.md)** · **فارسی** · [LICENSE](LICENSE) · [تاریخچهٔ تغییرات](CHANGELOG.fa.md) · [معماری](docs/ARCHITECTURE.md) · [پروتکل‌ها](docs/PROTOCOLS.md)
 
 [![CI](https://github.com/qasamij/raah-tunnel/actions/workflows/python-package.yml/badge.svg)](https://github.com/qasamij/raah-tunnel/actions/workflows/python-package.yml)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
@@ -295,4 +295,4 @@ python3 raahctl.py watch --host ir-entry.example.net --port 8877 --interval 30 -
 
 لاگ فعالیت باید در x-ui/Xray و با اطلاع کاربران فعال شود. فقط متادیتای لازم مانند زمان، کاربر، دامنه/مقصد، پروتکل و حجم را نگه‌دار؛ بدنهٔ ترافیک، رمزها و مسیر کامل HTTPS قابل ثبت امن نیستند. فایل لاگ را با دسترسی `600`، چرخش روزانه و نگهداری محدود (مثلاً ۷ یا ۳۰ روز) ذخیره کن. Raah این لاگ را تولید یا به تلگرام ارسال نمی‌کند.
 
-جزئیات طراحی و مقایسهٔ پروتکل‌ها: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) و [docs/PROTOCOLS.md](docs/PROTOCOLS.md). تغییرات نسخه‌ها در [CHANGELOG.md](CHANGELOG.md) آمده است.
+جزئیات طراحی و مقایسهٔ پروتکل‌ها: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) و [docs/PROTOCOLS.md](docs/PROTOCOLS.md). تغییرات نسخه‌ها در [CHANGELOG.fa.md](CHANGELOG.fa.md) آمده است و نسخهٔ انگلیسی آن در [CHANGELOG.md](CHANGELOG.md) است.
