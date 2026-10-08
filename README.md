@@ -103,27 +103,79 @@ you cannot automate. Get a real certificate for your outside domain, then on
 
 If you do not have a domain and certificate yet, stop here and get one first.
 Nothing else will work without it.
-
 ### Step 3 — Install on the outside server
 
-```bash
-sudo bash /tmp/raah-install.sh --config /root/raah-private-bundle/outside.json --start
+The wizard asks whether this machine should send the other server its half and
+install it there. Answer `y` and it does the whole thing:
+
+```
+  Shall this machine copy them over and install them there? [y/N] y
+  OUTSIDE server PUBLIC IP [203.0.113.10]:
+  SSH user on that server [root]:
+  Directory to place the files in on that server [/root]:
+  About to do this on root@203.0.113.10:
+    ...
+  Continue? [y/N] y
 ```
 
-If `outside.json` is on a different machine, copy it across first:
+Every prompt shows the value it would use anyway, so **Enter accepts it**. The
+defaults come from the answers you gave in the wizard, so in the normal case the
+whole exchange is `y`, Enter, Enter, Enter, `y`.
+
+What it does, in order:
+
+1. Checks for a usable SSH key. If there is none it offers to create one and
+   prints the public half for you to add to the other server. It never asks for,
+   stores or types a password.
+2. Tests the login, and checks whether that server already has a TLS
+   certificate, warning you first if it does not.
+3. Shows you exactly what will be sent and where, and waits for `y`.
+4. Copies the config **and** its `.install.json` in one `scp`, plus the
+   installer itself to `/tmp/raah-install.sh`.
+5. Runs `sudo bash /tmp/raah-install.sh --config ... --start` over there and
+   reports what happened.
+
+Answer `n` at the first prompt, or `Ctrl-C` anywhere, and nothing is sent. The
+manual commands are printed instead:
 
 ```bash
-scp /root/raah-private-bundle/outside.json root@OUTSIDE_IP:/root/outside.json
+scp /root/raah-private-bundle/outside.json /root/raah-private-bundle/outside.install.json root@OUTSIDE_IP:/root/
+ssh root@OUTSIDE_IP
+curl -fsSL https://raw.githubusercontent.com/qasamij/raah-tunnel/main/one-click-install.sh -o /tmp/raah-install.sh
+sudo bash /tmp/raah-install.sh --config /root/outside.json --start
 ```
+
+The `.install.json` is not optional: it is what enables Hysteria 2 port hopping
+on this server, and without it the service still starts but the hopping range is
+never redirected, so the tunnel quietly falls back to the slower path.
 
 ### Step 4 — Install on the Iran server
 
-```bash
-sudo bash /tmp/raah-install.sh --config /root/raah-private-bundle/iran-01.json --start
-```
+The same offer appears when you set up the Iran server instead, and it sends
+`iran-01.json` with `iran-01.install.json` to the outside address. You only do
+this once, on whichever server you set up first.
 
-Same deal: if the file is not on this machine, `scp` it over and point
-`--config` at wherever you put it.
+### Which half belongs on this server?
+
+A bundle holds one config per server, and putting the wrong one in place is the
+quietest mistake in the whole project. `sing-box` accepts either file, the
+service starts, the tunnel comes up, and it simply never carries traffic the way
+you expected — with nothing in the logs to explain why.
+
+So the installer reads each config and works out which half it is:
+
+| Half | Runs on | How it is recognised |
+| --- | --- | --- |
+| `outside.json` | Outside server (the entry) | Every outbound is `direct`, `block` or `dns` |
+| `iran-01.json` | Iran server (the exit) | It carries an outbound that dials the peer |
+| `client-linux.json` | Your own device | It has a `tun` inbound |
+
+The check reads the file's own structure, so a renamed or hand-copied half is
+still recognised. If the answer does not match what you said this box was, you
+get a warning naming both halves. **It still installs.** Re-homing a server is a
+legitimate thing to do, and a wrong guess must never be the reason a box cannot
+be brought up.
+
 
 ### Step 5 — Open the ports
 
@@ -164,7 +216,8 @@ that will use the tunnel. It is for a `sing-box` client with TUN support.
 | Symptom | Try |
 | --- | --- |
 | `Could not download ... over git or HTTPS` | The installer already retried over an archive. Check this server's internet. |
-| Service will not start | Option 5. A missing TLS certificate is the usual cause. || Probe fails but services are up | Ports are not open, or the client file is stale. |
+| Service will not start | Option 5. A missing TLS certificate is the usual cause. |
+| Probe fails but services are up | Ports are not open, or the client file is stale. |
 | Everything worked on another network but not yours | Open **both** TCP and UDP for the full port range. |
 
 ## Everything else
@@ -224,6 +277,36 @@ The default Outside REALITY base port is TCP/7788 and the default Iran REALITY b
 
 Advanced mode asks for separate Outside/Iran `urltest` URLs and the health interval. The default URL is `https://cp.cloudflare.com/generate_204`; use menu option 7 to change it if that endpoint is unreliable on either real path. Use `10s` for more aggressive failover checks or the calmer default `15s`.
 
+## IPv6
+
+Raah works over IPv6, and this is a tested property rather than an assumption.
+The generator accepts an IPv6 literal anywhere it accepts a hostname, every
+server inbound listens on `::` (dual-stack on Linux, so the same port serves
+both families), the nftables port-hopping table is in the `inet` family so one
+ruleset redirects Hysteria 2 hops for IPv4 and IPv6 alike, and the client
+profile already carries a ULA.
+
+What IPv6 does **not** give you is redundancy between address families. Each
+Iran node and the Outside server hold exactly one address, and the `urltest`
+groups select between nodes, not between address families. A server with both an
+IPv4 and an IPv6 address is reachable over whichever one you recorded; the other
+is not used as a fallback. To get cross-family failover, list the same server
+more than once with each address, which is a deliberate operator decision rather
+than automatic behaviour.
+
+Practical notes:
+
+- Enter the literal bare: `2001:db8:122::10`, not `[2001:db8:122::10]`. The
+  wizard strips brackets if you paste them, and it stores what is left.
+- A bare IPv6 address cannot carry a Hysteria 2 TLS certificate. With
+  IPv6-only, use a domain name for the certificate, or a certificate that
+  carries an IP SAN.
+- `ufw allow <port>/tcp` and `ufw allow <port>/udp` cover both families as long
+  as `IPV6=yes` in `/etc/default/ufw`. Your VPS provider firewall is separate
+  and must allow IPv6 too.
+- `sing-box check` in CI validates an IPv6 bundle alongside the IPv4 one, and
+  `tests/test_ipv6.py` asserts the properties above.
+
 ## Design
 
 ```mermaid
@@ -262,7 +345,20 @@ User lifecycle and quotas belong in x-ui/3x-ui. The legacy `add-user`, `list-use
 
 `e2e-probe` validates a generated client profile, starts a temporary mixed/SOCKS listener bound only to `127.0.0.1`, and sends HTTP(S) requests through the complete configured route. Use `--outbound TAG` to test one transport; omit it to test the configured final/urltest selection. Run it from the real client network for meaningful results.
 
-`edit-bundle` interactively updates addresses, transport ports, per-side REALITY SNI pools, per-side health URLs, and Hysteria2 hopping. It locks the bundle, creates a private timestamped backup, keeps only the newest three backups, preserves keys and credentials, and regenerates all matching server, metadata, and client files from `secrets.json`. Reinstall each affected server JSON together with its matching `.install.json`, then redistribute updated client profiles.
+`edit-bundle` interactively updates addresses, transport ports, per-side REALITY SNI pools, per-side health URLs, the failover interval, and Hysteria2 hopping. It locks the bundle, creates a private timestamped backup, keeps only the newest three backups, preserves keys and credentials, and regenerates all matching server, metadata, and client files from `secrets.json`. Reinstall each affected server JSON together with its matching `.install.json`, then redistribute updated client profiles.
+
+The health interval is menu item 12, and `--health-interval` does the same thing
+without the prompts:
+
+```bash
+python3 raahctl.py edit-bundle /root/raah-private-bundle --health-interval 45s
+```
+
+It rewrites the `interval` of every `urltest` group in every regenerated file, so
+the two sides cannot end up failing over at different speeds. Values are Go
+durations (`ms`, `s`, `m`, `h`); `0s` is rejected, because an interval of zero
+makes sing-box hammer the health URL instead of failing over. There is no lower
+bound worth enforcing beyond that, so `10s` stays a reasonable choice.
 
 After the first installation, open the menu with `sudo raah-install --menu`. Option 8 updates to the newest published stable `v*` tag. Option 9 removes the Raah service, `/etc/raah`, the installed checkout and launcher after an explicit confirmation; deletion of `/root/raah-private-bundle` requires a second confirmation. The shared sing-box package is intentionally retained.
 

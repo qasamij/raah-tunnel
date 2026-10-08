@@ -16,18 +16,33 @@ assert SPEC and SPEC.loader
 raahctl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(raahctl)
 
+# Documentation-range addresses, so a run can never reach a real host.
+# 2001:db8::/32 is the reserved IPv6 documentation range.
+ADDRESSES = {
+    "4": ("192.0.2.10", "198.51.100.10"),
+    "6": ("2001:db8:122::10", "2001:db8:133::10"),
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True)
     parser.add_argument("--cert", required=True)
     parser.add_argument("--key", required=True)
+    # Every generated config is checked with the real sing-box binary. An IPv6
+    # literal in "server" is the one thing this project cannot verify without
+    # that binary, and it is exactly the kind of assumption that stays an
+    # assumption until a test fails.
+    parser.add_argument("--family", choices=sorted(ADDRESSES), default="4",
+                        help="address family for both servers (4 or 6)")
     args = parser.parse_args()
+
+    de_address, ir_address = ADDRESSES[args.family]
 
     outside_private, outside_public = raahctl.reality_keypair()
     iran_private, iran_public = raahctl.reality_keypair()
     data = {
-        "de_address": "192.0.2.10",
+        "de_address": de_address,
         "de_tls_name": "outside.example.com",
         "ir_tls_name": "iran.example.com",
         "de_reality_sni": "www.cloudflare.com",
@@ -56,7 +71,7 @@ def main() -> None:
         "de_health_url": raahctl.DEFAULT_HEALTH_URL,
         "ir_health_url": raahctl.DEFAULT_HEALTH_URL,
         "iran_nodes": [{
-            "address": "198.51.100.10",
+            "address": ir_address,
             "tls_name": "iran.example.com",
             "cert": args.cert,
             "key": args.key,

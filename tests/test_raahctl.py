@@ -755,6 +755,63 @@ class BashGlobTests(unittest.TestCase):
             self.assertEqual(backups[0].stat().st_mode & 0o777, 0o700)
             self.assertEqual((root / "secrets.json").stat().st_mode & 0o777, 0o600)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits required")
+    def test_edit_bundle_changes_the_health_check_interval_everywhere(self):
+        # The interval used to be fixed at 15s unless the bundle was generated
+        # in advanced mode, so there was no way to change it after the fact.
+        with tempfile.TemporaryDirectory() as directory, patch("sys.stdout", new_callable=io.StringIO):
+            root = Path(directory) / "bundle"
+            original = sample()
+            original["health_interval"] = "15s"
+            raahctl.write_bundle(root, original, False)
+            args = Namespace(
+                path=str(root),
+                outside_address=None,
+                iran_address=[],
+                outside_hy2_port=None,
+                outside_reality_port=None,
+                iran_hy2_port=None,
+                iran_reality_port=None,
+                outside_sni=None,
+                iran_sni=None,
+                health_interval="45s",
+            )
+            self.assertEqual(raahctl.edit_bundle(args), 0)
+            self.assertEqual(
+                json.loads((root / "secrets.json").read_text())["health_interval"], "45s")
+            # Every urltest group has to pick it up, on both servers and on the
+            # client, or a change would only half take effect.
+            groups = 0
+            for name in ("outside.json", "iran-01.json", "client-linux.json"):
+                document = json.loads((root / name).read_text())
+                for outbound in document["outbounds"]:
+                    if outbound.get("type") == "urltest":
+                        groups += 1
+                        self.assertEqual(outbound["interval"], "45s", f"{name}:{outbound['tag']}")
+            self.assertGreater(groups, 0)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits required")
+    def test_edit_bundle_rejects_a_nonsense_health_interval(self):
+        with tempfile.TemporaryDirectory() as directory, patch("sys.stdout", new_callable=io.StringIO):
+            root = Path(directory) / "bundle"
+            raahctl.write_bundle(root, sample(), False)
+            before = (root / "secrets.json").read_text()
+            args = Namespace(
+                path=str(root),
+                outside_address=None,
+                iran_address=[],
+                outside_hy2_port=None,
+                outside_reality_port=None,
+                iran_hy2_port=None,
+                iran_reality_port=None,
+                outside_sni=None,
+                iran_sni=None,
+                health_interval="0s",
+            )
+            with patch("sys.stderr", new_callable=io.StringIO):
+                self.assertEqual(raahctl.edit_bundle(args), 2)
+            self.assertEqual((root / "secrets.json").read_text(), before)
+
     def test_bundle_backup_retention_keeps_only_three_newest(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "bundle"

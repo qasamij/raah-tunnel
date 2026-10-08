@@ -15,3 +15,17 @@ outside.json
 reverse-*.json
 secrets.json
 client-linux.json
+
+# DEPLOY.txt ships inside the private bundle and is chmod 600 like the rest of
+# it. It is not a credential, but it is the port fingerprint of a real
+# deployment, and every other file the generator writes is ignored.
+DEPLOY.txt
+
+# add-user / revoke-user / enforce-users write a full copy of the config next to
+# the original when --out is not given, so these carry the relay password, the
+# REALITY private keys and every user credential. They do not end in .json, so
+# the rules above do not catch them.
+*.json.with-*
+*.json.revoked
+*.json.enforced
+*.users.json

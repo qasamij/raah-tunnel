@@ -11,6 +11,71 @@ recorded here only.
 
 ## Unreleased
 
+### IPv6 is now tested, and the limits are documented
+
+The tunnel has always accepted an IPv6 address, but nothing checked it. Every
+other validator only ever saw IPv4, because the test bundle was hardcoded to
+documentation-range IPv4 addresses — so a whole address family rested on the
+assumption that a bare IPv6 literal is fine in each field it lands in. That
+assumption is now enforced, and the README states plainly what IPv6 does and
+does not give you.
+
+- CI builds the bundle **twice**, once per address family, and runs
+  `sing-box check` over every generated config in both. sing-box is the only
+  authority on whether a bare v6 literal is accepted in `server`, and that is
+  not something an offline check can answer.
+- `tests/test_ipv6.py` asserts the properties that matter: a v6 literal
+  survives `valid_host`, brackets are stripped on the way in and never stored,
+  the literal lands **bare** in every outbound, a v6-only bundle writes and
+  round-trips through `secrets.json`, and the hop metadata is still emitted.
+- A `urltest` group names its members by tag, so reading its `outbounds` list
+  directly yields strings and any server-field check silently inspects nothing.
+  The test resolves each tag to the outbound it names, and separately asserts
+  that IPv6 addresses were actually seen — so it cannot pass by checking
+  nothing.
+- The port-hopping table is asserted to stay in the `inet` family with no
+  address selector. Were it narrowed to `ip`, IPv6 would stop hopping and
+  nothing anywhere would report an error.
+- `tests/mutation-ipv6.sh` puts seven bugs back and requires the suite to
+  object, including a bracketed `server` address. That one matters most: a
+  bracketed literal still loads, the service still starts, and the tunnel simply
+  never connects.
+- Documented in both READMEs, including the part IPv6 does *not* do: each node
+  holds exactly one address, so there is no cross-family failover. A server with
+  both is reachable over whichever address you recorded. Listing it twice is a
+  deliberate operator decision, not automatic behaviour.
+
+### The installer can now reach the other server for you
+
+Setting up the second server used to mean reading a block of `scp` and `ssh`
+commands and typing them by hand, with several paths in them to get right. The
+role setup now offers to do it.
+
+- After the local config is installed, the installer offers to send the peer its half and start it there. Answer `y` and it checks for a usable SSH key, tests the login, warns if that server has no TLS certificate, shows exactly what will be sent, and waits for a second `y`.
+- Every prompt shows the value it would use anyway, so **Enter accepts it**. The peer's address is read out of the bundle's own `secrets.json`, so it is right even on a run that reused an existing bundle and never saw the wizard.
+- Only the config and its matching `.install.json` are sent, plus the installer itself to `/tmp/raah-install.sh`. TLS keys are never copied, because they are the one thing that has to stay put.
+- If there is no usable SSH key it offers to create one and prints the public half to add to the other server. It never asks for, stores, or types a password, and every connection runs with `BatchMode=yes` so it cannot fall into an interactive prompt.
+- Answer `n`, or `Ctrl-C` at any point, and nothing is sent. The manual commands are printed instead, and a prerequisite that cannot be satisfied downgrades to those same instructions rather than failing.
+- The peer's public IP came from a variable that did not exist. On a run that reused an existing bundle the read tripped `set -u` and killed the installer before it printed the remaining steps.
+
+### The installer now says which half belongs on this server
+
+A bundle holds one config per server, and putting the wrong one in place is the quietest mistake in the project: `sing-box` accepts either file, the service starts, the tunnel comes up, and it simply never carries the traffic you expected, with nothing in the logs to say why.
+
+- `install-unit.sh` reads each config and works out which half it is: the Outside entry has only `direct`/`block`/`dns` outbounds, the Iran exit carries an outbound that dials the peer, and a client profile is recognised by its `tun` inbound.
+- The classification is read from the file's own structure, so a renamed or hand-copied half is still recognised.
+- A mismatch with the declared role, or a client profile, produces a warning that names both halves. **It still installs.** Re-homing a server is legitimate, and a wrong guess must never be the reason a box cannot be brought up.
+- Menu option 3 used to describe the two files backwards, calling `iran-01.json` the entry and `outside.json` the exit. It is exactly the reverse: `iran-01.json` runs on the Iran server and is that box's exit. It now asks which half belongs here first, and defaults the path from the answer.
+
+### Failover interval is editable after the fact
+
+- `edit-bundle` gained a health-interval field (menu item 12) and a `--health-interval` flag. It rewrites the `interval` of every `urltest` group in every regenerated file, so the two sides cannot end up failing over at different speeds.
+- Values are Go durations and must be positive. `0s` is rejected because it makes `sing-box` hammer the health URL rather than fail over.
+
+### Paths with spaces, and the systemd unit
+
+- The generated `ExecStart` now quotes `$sing_box`, so an install under a path containing a space no longer produces a unit that cannot be started. The heredoc that builds the unit stays unquoted on purpose, because it is what expands `$sing_box` at install time.
+
 ### The install menu now asks which server you are on
 
 The menu used to ask "which topology?", which is the wrong first question for
@@ -49,6 +114,25 @@ invariant was broken silently.
 - `tests/test-menu.sh` and `tests/test-docs.sh` are new and run in CI. They cover the cases that hurt a real user: a menu number the documentation contradicts, a role setup that mints a second bundle, an empty config filename, a first run that dies before printing the next instruction, and a failed restart that takes the installer with it.
 - The documentation check derives the menu from the source and compares it against every option number quoted in both guides, so a stale number fails the build instead of sending a beginner to the wrong menu entry on a live server.
 - The new suites initially wrote to the product's default bundle path under `/root`, which a GitHub Actions runner cannot write, so they passed on a workstation and failed in CI. They now use a private temporary directory and clean up after themselves.
+- The peer deployment, the role check and the install unit each have a suite of their own, and every suite has a mutation test that puts the bug back and requires the suite to object. A test that cannot fail when the code is broken reports safety it has not earned.
+- Two of those guards were decorative and are now real. The `latest_release_ref` assertion was not anchored to the copy inside `menu()`, so a second copy in `update()` satisfied it after the menu's guard was gone. The documentation cell-count check hardcoded two columns, which rejected the three-column tables this project now ships.
+- The mutation harnesses only checked that their pattern was *gone* after mutating. A pattern the source had outgrown made the substitution a silent no-op, the suite stayed green, and the run reported "not detected" — which reads like a coverage gap when the truth is that the test had stopped testing anything. They now require the target to exist first, and say "stale" instead of "slipped".
+- `tests/test-install-unit.sh` replaces a behavioural sandbox that had to be abandoned: it depended on file-descriptor and process-substitution behaviour that does not hold on Git Bash. The invariants are now asserted against the source, which is what actually matters for a generated unit file.
+- The role classifier is the one part worth proving behaviourally, and it is where a behavioural test *is* reliable: pure JSON in, one string out. `tests/test-role-detect.sh` covers all three shapes, a renamed file, and a config it cannot parse.
+- CI runs Python 3.12 alongside 3.9 to 3.11, syntax-checks every shell script under `tests/`, and runs the new suites and all four mutation harnesses. The POSIX-only `edit-bundle` tests skip on Windows, so CI is the only place they actually execute.
+
+### Fixes from a full review of the tree
+
+- `scripts/install-unit.sh` built its metadata path from `$1`, but the argument loop has shifted every argument away by then, so under `set -u` the install died at the `.install.json` lookup with `1: unbound variable` — before a single file was written. It reads `$config_path` now, and `tests/test-install-unit.sh` fails if any positional parameter is touched after the parse loop.
+- `firewall-plan` on a single config file now reads the matching `.install.json` too. That call is what the README documents, and without the sibling metadata the plan opened only the base UDP port: the half-open firewall that makes port hopping fail on a real server, reproduced by following the guide.
+- `edit-bundle --hop enabled` used to fail at the last prompt on a bundle generated with `--no-hop`, because the stored count of 1 is not a usable range. It falls back to the generator default, and `generate` enforces the same 2–256 window `edit-bundle` does, so a bundle can no longer be created in a state that cannot be edited.
+- `write_bundle --mode both --force` runs its managed-file cleanup before the mode branch. Converting a bundle left the old top-level `outside.json` and `iran-01.json` — keys and ports included — beside the new `direct/` and `reverse/` directories, where a reader copying "the half for this server" would pick up the stale file.
+- `status` no longer dies with a traceback off Linux: `os.getloadavg` does not exist on Windows and `except OSError` never covered the resulting `AttributeError`. `quota-check` rejects a zero or negative `--limit-gb` instead of reporting every interface as over quota.
+- `deploy_peer` no longer hands `scp` a `.install.json` that is not there. The warning promised the copy still ran; the missing path failed the transfer and the config never arrived. The summary and the printed manual commands now name only the files that exist.
+- The menu survives everything that can legitimately fail: options 1, 2 and 4 are guarded, the two bare `read` prompts hand control back on EOF, cancelling option 3 returns to the menu instead of ending the installer, and a failed update says so rather than printing the success line.
+- `prepare_environment` guards every critical step explicitly. Bash switches `set -e` off for a whole function called in a condition, so the menu's `if prepare_environment` had made the body errexit-exempt and a failed `apt-get` fell straight through to the clone. `require_ref` returns instead of exiting, so a bad `--ref` no longer closes the session.
+- Uninstall and the cleanup after a failed clone go through `rm_tree`, which refuses a non-absolute path and the single-level system roots: a stray `RAAH_APP_ROOT` or `RAAH_BUNDLE` can no longer turn a cleanup into a reinstall of the machine.
+- `tests/test-deploy-peer.sh` gained the missing-metadata case, and the mutation that puts that bug back now targets the conditional file list instead of the old single `scp` line.
 
 
 ## 0.11.0

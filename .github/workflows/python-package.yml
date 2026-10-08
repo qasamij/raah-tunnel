@@ -12,7 +12,7 @@ jobs:
       # failure; a 3.9-only regression must not hide behind a green 3.11 run.
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11"]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +24,7 @@ jobs:
       # which surfaces much later as an unrelated exit code 127 from bash.
       - name: Verify repository layout
         run: |
-          for f in raahctl.py one-click-install.sh scripts/install-unit.sh scripts/port-hop.sh tests/test_raahctl.py tests/ci_generate_bundle.py tests/test-menu.sh tests/test-docs.sh; do
+          for f in raahctl.py one-click-install.sh scripts/install-unit.sh scripts/port-hop.sh tests/test_raahctl.py tests/ci_generate_bundle.py tests/test-menu.sh tests/test-docs.sh tests/test-install-unit.sh tests/test-role-detect.sh tests/test-deploy-peer.sh tests/test_ipv6.py tests/mutation-menu.sh tests/mutation-role.sh tests/mutation-deploy.sh tests/mutation-docs.sh tests/mutation-ipv6.sh; do
             if [ ! -f "$f" ]; then
               echo "::error::missing $f -- the repository layout is flattened or incomplete"
               exit 1
@@ -63,19 +63,38 @@ jobs:
           bash -n one-click-install.sh
           bash -n scripts/install-unit.sh
           bash -n scripts/port-hop.sh
+          for t in tests/*.sh; do bash -n "$t"; done
 
       # The menu is the only interface a beginner has. These checks encode the
       # failures that hurt a real user: a menu number the docs contradict, a
       # role setup that mints a second bundle and breaks the key pair, and a
       # first run that dies before printing the one instruction needed.
-      - name: Check menu and docs behaviour
+      #
+      # The POSIX-only edit_bundle tests skip on Windows, so these shell suites
+      # are the only place they actually run. Skipping them there would leave
+      # the paths this project got wrong before completely unexercised.
+      - name: Check menu, role detection and docs behaviour
         run: |
           bash tests/test-menu.sh
+          bash tests/test-role-detect.sh
+          bash tests/test-install-unit.sh
+          bash tests/test-deploy-peer.sh
           bash tests/test-docs.sh
+
+      # A test that cannot fail when the code is broken is decoration. Each of
+      # these puts a real bug back and requires the suite above to object, and
+      # each restores the source byte-for-byte afterwards.
+      - name: Mutation-test the guards the suites rely on
+        run: |
+          bash tests/mutation-menu.sh
+          bash tests/mutation-role.sh
+          bash tests/mutation-deploy.sh
+          bash tests/mutation-docs.sh
+          bash tests/mutation-ipv6.sh
 
       - name: Compile and test
         run: |
-          python -m py_compile raahctl.py tests/test_raahctl.py tests/ci_generate_bundle.py
+          python -m py_compile raahctl.py tests/test_raahctl.py tests/ci_generate_bundle.py tests/test_ipv6.py
           python -m pytest -v
 
       - name: Install official sing-box package
@@ -88,27 +107,40 @@ jobs:
       # sing-box check is what actually catches a malformed `server_ports`
       # range. Without it a config that sing-box refuses to load can still be
       # committed, because `sing-box check` is the only real validator.
+      #
+      # The bundle is built twice, once per address family. An IPv6 literal in
+      # `server` is the one thing nothing else in the suite can verify: the
+      # generator runs offline and the offline validators only ever saw IPv4.
+      # sing-box check is the authority on whether a bare v6 literal is
+      # accepted there, so both families go through the real binary.
       - name: Validate every generated config with sing-box
         run: |
           mkdir -p build/ci-tls
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
             -subj '/CN=outside.example.com' \
             -keyout build/ci-tls/privkey.pem -out build/ci-tls/fullchain.pem
-          python tests/ci_generate_bundle.py \
-            --out build/ci-bundle \
-            --cert "$PWD/build/ci-tls/fullchain.pem" \
-            --key "$PWD/build/ci-tls/privkey.pem"
-          checked=0
-          while IFS= read -r -d '' config; do
-            echo "sing-box check $config"
-            sing-box check -c "$config"
-            checked=$((checked + 1))
-          done < <(find build/ci-bundle -type f -name '*.json' ! -name secrets.json ! -name '*.install.json' -print0)
-          test "$checked" -gt 0 || { echo 'no configs were generated'; exit 1; }
-          hops=0
-          while IFS= read -r -d '' metadata; do
-            echo "port-hop check $metadata"
-            bash scripts/port-hop.sh check "$metadata"
-            hops=$((hops + 1))
-          done < <(find build/ci-bundle -type f -name '*.install.json' -print0)
-          test "$hops" -gt 0 || { echo 'no install metadata was generated'; exit 1; }
+          total=0
+          for family in 4 6; do
+            out="build/ci-bundle-v$family"
+            python tests/ci_generate_bundle.py \
+              --out "$out" \
+              --family "$family" \
+              --cert "$PWD/build/ci-tls/fullchain.pem" \
+              --key "$PWD/build/ci-tls/privkey.pem"
+            checked=0
+            while IFS= read -r -d '' config; do
+              echo "sing-box check (IPv$family) $config"
+              sing-box check -c "$config"
+              checked=$((checked + 1))
+            done < <(find "$out" -type f -name '*.json' ! -name secrets.json ! -name '*.install.json' -print0)
+            test "$checked" -gt 0 || { echo "no IPv$family configs were generated"; exit 1; }
+            total=$((total + checked))
+            hops=0
+            while IFS= read -r -d '' metadata; do
+              echo "port-hop check (IPv$family) $metadata"
+              bash scripts/port-hop.sh check "$metadata"
+              hops=$((hops + 1))
+            done < <(find "$out" -type f -name '*.install.json' -print0)
+            test "$hops" -gt 0 || { echo "no IPv$family install metadata was generated"; exit 1; }
+          done
+          echo "validated $total configs across both address families"

@@ -110,6 +110,21 @@ def valid_hop_interval(value: str) -> bool:
     return seconds is not None and seconds >= MIN_HOP_INTERVAL_SECONDS
 
 
+# urltest has no minimum worth enforcing, but a zero or negative interval would
+# make sing-box hammer the health URL, so require something measurable.
+def valid_duration(value: str) -> bool:
+    seconds = duration_seconds(value)
+    return seconds is not None and seconds > 0
+
+
+def ask_duration(label: str, default: str) -> str:
+    while True:
+        value = ask_interval(label, default)
+        if valid_duration(value):
+            return value
+        print("Enter a positive duration like 10s, 1m, or 2m.", file=sys.stderr)
+
+
 def ask_hop_interval(label: str, default: str) -> str:
     while True:
         value = ask_interval(label, default)
@@ -256,8 +271,9 @@ def scan_sni_candidates(candidates: list[str], timeout: float, count: int) -> li
                     with context.wrap_socket(raw, server_hostname=candidate):
                         samples.append((time.perf_counter() - start) * 1000)
             except OSError as exc:
-                errors.append(str(exc))
-            except ssl.SSLError as exc:
+                # ssl.SSLError is a subclass of OSError, so certificate and
+                # handshake failures land here as well; a separate clause after
+                # this one could never run.
                 errors.append(str(exc))
         if samples:
             avg = sum(samples) / len(samples)
@@ -759,6 +775,16 @@ def write_bundle(dest: Path, data: dict[str, Any], force: bool, mode: str = "dir
         raise RuntimeError(f"{dest} already exists and is not empty; choose a new path or pass --force.")
     dest.mkdir(parents=True, exist_ok=True, mode=0o700)
     dest.chmod(0o700)
+    if force:
+        # The cleanup runs before the mode branch on purpose: converting an
+        # existing direct bundle into a "both" bundle used to leave the old
+        # top-level outside.json/iran-01.json (and their keys and ports) sitting
+        # next to the new direct/ and reverse/ directories, where a reader
+        # copying "the half for this server" would pick up the stale file.
+        managed = ["outside.json", "outside.install.json", "germany.json", "client-linux.json", "secrets.json", "DEPLOY.txt", *[p.name for p in dest.glob("iran-[0-9]*.json")], *[p.name for p in dest.glob("iran-[0-9]*.install.json")]]
+        managed.extend(["reverse-outside-entry.json", "reverse-outside-entry.install.json", "reverse-germany-entry.json", "reverse-client-linux.json", *[p.name for p in dest.glob("reverse-iran-exit-[0-9]*.json")], *[p.name for p in dest.glob("reverse-iran-exit-[0-9]*.install.json")]])
+        for name in managed:
+            (dest / name).unlink(missing_ok=True)
     if mode == "both":
         write_bundle(dest / "direct", data, force, "direct")
         write_bundle(dest / "reverse", data, force, "reverse")
@@ -780,11 +806,6 @@ order.
         (dest / "DEPLOY.txt").write_text(notes, encoding="utf-8")
         (dest / "DEPLOY.txt").chmod(0o600)
         return
-    if force:
-        managed = ["outside.json", "outside.install.json", "germany.json", "client-linux.json", "secrets.json", "DEPLOY.txt", *[p.name for p in dest.glob("iran-[0-9][0-9].json")], *[p.name for p in dest.glob("iran-[0-9][0-9].install.json")]]
-        managed.extend(["reverse-outside-entry.json", "reverse-outside-entry.install.json", "reverse-germany-entry.json", "reverse-client-linux.json", *[p.name for p in dest.glob("reverse-iran-exit-[0-9][0-9].json")], *[p.name for p in dest.glob("reverse-iran-exit-[0-9][0-9].install.json")]])
-        for name in managed:
-            (dest / name).unlink(missing_ok=True)
     if mode == "reverse":
         write_private(dest / "reverse-outside-entry.json", make_reverse_germany_entry(data))
         write_private(dest / "reverse-outside-entry.install.json", install_metadata(data, "de"))
@@ -928,8 +949,11 @@ def generate(args: argparse.Namespace) -> int:
         hop_count = int(getattr(args, "hop_count", 32))
         if advanced and hop_choice:
             hop_count = ask_positive_int("UDP ports per Hysteria 2 hopping range", hop_count, 256)
-        if hop_count < 2 and hop_choice:
-            raise ValueError("Port hopping needs at least 2 UDP ports.")
+        if hop_choice and not 2 <= hop_count <= 256:
+            # edit-bundle enforces the same window, and a bundle generated with
+            # a larger range can never be edited again, so reject it here where
+            # the reader can still fix it with a single answer.
+            raise ValueError("Hysteria 2 hop count must be from 2 to 256.")
         d["hy2_hop_enabled"] = bool(hop_choice)
         d["hy2_hop_count"] = hop_count if hop_choice else 1
         d["hy2_hop_interval"] = (ask_hop_interval("Hysteria 2 port-hop interval", "30s")
@@ -1075,11 +1099,14 @@ def edit_bundle(args: argparse.Namespace) -> int:
         hop_mode = getattr(args, "hop", None)
         hop_count = getattr(args, "hop_count", None)
         hop_interval = getattr(args, "hop_interval", None)
+        # The health-check interval used to be fixed at 15s unless the bundle was
+        # generated in advanced mode, so there was no way to change it later.
+        health_every = getattr(args, "health_interval", None)
         if not any((args.outside_address, iran_changes, args.outside_hy2_port,
                     args.outside_reality_port, args.iran_hy2_port,
                     args.iran_reality_port, args.outside_sni, args.iran_sni,
                     outside_health_url, iran_health_url, hop_mode,
-                    hop_count, hop_interval)):
+                    hop_count, hop_interval, health_every)):
             print(f"Bundle: {root} | mode: {mode}")
             print(f"1) Outside address: {data['de_address']}")
             for index, node in enumerate(data["iran_nodes"], 1):
@@ -1093,6 +1120,7 @@ def edit_bundle(args: argparse.Namespace) -> int:
             print(f"9) Outside-path health URL: {health_url(data, 'de')}")
             print(f"10) Iran-path health URL: {health_url(data, 'ir')}")
             print(f"11) Hysteria 2 port hopping: {'enabled' if len(hy2_server_ports(data, 'de')) > 1 else 'disabled'}")
+            print(f"12) Health-check interval: {health_interval(data)}")
             print("0) Cancel")
             choice = ask("Select one setting to edit")
             if choice == "0":
@@ -1128,10 +1156,17 @@ def edit_bundle(args: argparse.Namespace) -> int:
                 enabled = ask_yes_no("Enable coordinated Hysteria 2 UDP port hopping", len(hy2_server_ports(data, "de")) > 1)
                 hop_mode = "enabled" if enabled else "disabled"
                 if enabled:
-                    hop_count = ask_positive_int("UDP ports per hopping range", int(data.get("hy2_hop_count", 32)), 256)
+                    stored_count = int(data.get("hy2_hop_count", 32) or 0)
+                    # A no-hop bundle stores 1; offering it as the default would
+                    # make Enter fail the range check at the end of the edit.
+                    hop_count = ask_positive_int(
+                        "UDP ports per hopping range",
+                        stored_count if 2 <= stored_count <= 256 else 32, 256)
                     hop_interval = ask_hop_interval("Port-hop interval", str(data.get("hy2_hop_interval", "30s")))
+            elif choice == "12":
+                health_every = ask_duration("Health-check interval", health_interval(data))
             else:
-                raise ValueError("Choose 0, 1, 2.N, or 3 through 11.")
+                raise ValueError("Choose 0, 1, 2.N, or 3 through 12.")
 
         if args.outside_address:
             host = args.outside_address.strip().strip("[]")
@@ -1163,11 +1198,27 @@ def edit_bundle(args: argparse.Namespace) -> int:
                 if not valid_health_url(value):
                     raise ValueError(f"{key} must be a complete HTTP(S) URL.")
                 changes[key] = value
+        if health_every is not None:
+            if not valid_duration(health_every):
+                raise ValueError("Health-check interval must be a duration such as 10s, 1m or 2m.")
+            changes["health_interval"] = health_every
         hopping_enabled = (hop_mode == "enabled" if hop_mode is not None
                            else len(hy2_server_ports(data, "de")) > 1)
-        count = int(hop_count if hop_count is not None else data.get("hy2_hop_count", 32 if hopping_enabled else 1))
-        if hopping_enabled and not 2 <= count <= 256:
-            raise ValueError("Hysteria 2 hop count must be from 2 to 256.")
+        if hop_count is not None:
+            count = int(hop_count)
+            if hopping_enabled and not 2 <= count <= 256:
+                raise ValueError("Hysteria 2 hop count must be from 2 to 256.")
+        elif hopping_enabled:
+            # A bundle generated with --no-hop stores 1, which is not a usable
+            # range, so `--hop enabled` (and simply pressing Enter in the menu)
+            # has nothing meaningful to reuse: fall back to the generator
+            # default instead of failing after every question was answered. A
+            # stored count outside the window is kept as-is, because silently
+            # re-ranging a live bundle would contradict the open firewall rules.
+            stored = int(data.get("hy2_hop_count", 32) or 0)
+            count = stored if stored >= 2 else 32
+        else:
+            count = 1
         if hop_interval is not None and not valid_hop_interval(hop_interval):
             raise ValueError(f"Hysteria 2 hop interval must be at least "
                              f"{MIN_HOP_INTERVAL_SECONDS:g}s, for example 30s or 1m.")
@@ -1536,6 +1587,15 @@ def config_ports(config: dict[str, Any]) -> list[tuple[str, int]]:
 def firewall_plan(args: argparse.Namespace) -> int:
     root = Path(args.path)
     configs = [root] if root.is_file() else sorted(root.rglob("*.json"))
+    # A single server config is the documented entry point (the README shows
+    # `firewall-plan /root/raah-private-bundle/outside.json`), and the hopping
+    # range lives only in the matching .install.json. Without it the plan would
+    # silently open just the base UDP port, which is exactly the half-open
+    # firewall that makes port hopping fail on a real server.
+    if root.is_file() and not root.name.endswith(".install.json"):
+        sibling = root.with_name(f"{root.stem}.install.json")
+        if sibling.is_file():
+            configs.append(sibling)
     ports: set[tuple[str, int]] = set()
     udp_ranges: set[str] = set()
     errors: list[str] = []
@@ -1574,6 +1634,12 @@ def firewall_plan(args: argparse.Namespace) -> int:
 
 
 def quota_check(args: argparse.Namespace) -> int:
+    # A zero or negative limit would make `over_limit` true (or the percentage
+    # negative) for every interface regardless of traffic, so reject it before
+    # reading anything.
+    if args.limit_gb <= 0:
+        print("--limit-gb must be greater than 0.", file=sys.stderr)
+        return 2
     base = Path("/sys/class/net") / args.interface / "statistics"
     try:
         rx = int((base / "rx_bytes").read_text().strip())
@@ -1905,11 +1971,15 @@ def sni_scan(args: argparse.Namespace) -> int:
 
 def system_status(args: argparse.Namespace) -> int:
     result: dict[str, Any] = {}
-    try:
-        one, five, fifteen = os.getloadavg()
-        result["loadavg"] = {"1m": one, "5m": five, "15m": fifteen}
-    except OSError:
-        pass
+    # os.getloadavg only exists on Unix: on Windows looking it up raises
+    # AttributeError, which an `except OSError` here would never catch and the
+    # command would die with a traceback instead of reporting what it can.
+    if hasattr(os, "getloadavg"):
+        try:
+            one, five, fifteen = os.getloadavg()
+            result["loadavg"] = {"1m": one, "5m": five, "15m": fifteen}
+        except OSError:
+            pass
     try:
         meminfo: dict[str, int] = {}
         for line in Path("/proc/meminfo").read_text().splitlines():
@@ -1999,6 +2069,8 @@ def build_parser() -> argparse.ArgumentParser:
     edit.add_argument("--hop", choices=["enabled", "disabled"], help="enable or disable coordinated Hysteria 2 UDP port hopping")
     edit.add_argument("--hop-count", type=int, help="number of UDP ports in each hopping range")
     edit.add_argument("--hop-interval", help="port hopping interval, for example 30s")
+    edit.add_argument("--health-interval", metavar="DURATION",
+                      help="urltest health-check interval for both sides, for example 15s or 1m")
     edit.set_defaults(func=edit_bundle)
     val = sub.add_parser("validate", help="validate a config with sing-box check")
     val.add_argument("config")
